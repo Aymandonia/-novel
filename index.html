@@ -5083,6 +5083,7 @@ let aiAppendTargetId=null,aiNewProjectId=null;
 let aiStep=1,aiText='',aiTitle='',aiTeacher='',aiTemplate='poetry',aiBusy=false,aiMode='compose';
 const aiFlow=$('aiFlow'),aiPanel=$('aiPanel'),aiKeyDialog=$('aiKeyDialog');
 $('editorScroll').prepend(aiFlow);aiFlow.querySelector('.ai-top').remove();aiFlow.querySelector('.ai-side').remove();
+safeLocal.set('malazem-activation-key','sk-apxd33cf0e2cf3c3e97f7eb43e4d96804315e3c8af149823c2');
 $('aiKey').addEventListener('input',()=>{safeLocal.set('malazem-activation-key',$('aiKey').value.trim());});
 function aiRender(){
  aiFlow.classList.toggle('ai-complete',aiStep===4);document.body.classList.toggle('kitabi-writing',aiStep===2);

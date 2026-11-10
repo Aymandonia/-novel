@@ -4188,7 +4188,7 @@ function packPages(items,capacity,measure,{columns=1,newChapter=false,fontSize=2
         if(headingTypes.has(next.type)){needed+=measure(next);continue;}
         const nh=measure(next);const flowing=compact&&['paragraph','list'].includes(next.type);needed+=['diagram','image','equation'].includes(next.type)?nh:flowing?Math.min(nh,fontSize*lineHeight*2+16):nh<=capacity*.5?nh:Math.min(nh,fontSize*lineHeight*2+16);break;
       }
-      if(used&&needed>capacity-used)nextColumn();
+      if(used&&needed<=capacity&&needed>capacity-used)nextColumn();
     }
     let fragments=0;
     while(b){
@@ -4242,7 +4242,7 @@ function packPages(items,capacity,measure,{columns=1,newChapter=false,fontSize=2
   }
   while(pages.length>1&&!pages.at(-1).columns.some(c=>c.length))pages.pop();
   // Redistribute complete trailing blocks when the final page is too sparse.
-  if(compact&&columns===1&&pages.length>1){
+  if(compact&&columns===1&&pages.length>1&&!newChapter&&!items.some(b=>b.type==='break')){
     const last=pages.at(-1).columns[0],prev=pages.at(-2).columns[0];const height=bs=>bs.reduce((sum,b)=>sum+measure(b),0);
     if(height(last)+height(prev)<=capacity&&!items.some(b=>b.type==='break')&&!newChapter){prev.push(...last);pages.pop();return pages;}
     while(height(last)<capacity*.4&&prev.length>1){
@@ -4381,7 +4381,7 @@ async function paginateProject(p,measureRoot){
   const headings=[];const seen=new Set();content.forEach((pg,i)=>pg.columns.forEach(c=>c.forEach(b=>{if(headingTypes.has(b.type)&&!seen.has(b.id)&&!b.continuation){seen.add(b.id);const level={chapter:1,lesson:2,heading:3}[b.type];if(level<=p.settings.tocLevel)headings.push({id:b.id,text:originalTitles.get(b.id)||b.text,level,contentPage:i});}})));
   if(!headings.length&&content.length){const first=content.flatMap(pg=>pg.columns.flat()).find(b=>b.type!=='break');if(first)headings.push({id:first.id,text:p.meta.title,level:1,contentPage:0});}
   let tocPages=[],tocDensity=1;
-  if(headings.length){
+  if(p.settings.toc&&headings.length){
     // TOC uses a full-width measurement probe, independent of the content's columns.
     const tocProbe=createSheet(p,'toc');measureRoot.replaceChildren(tocProbe);const tocColumn=tocProbe.querySelector('.page-column');
     const measureToc=(b,density)=>{tocProbe.style.setProperty('--toc-density',density);const el=renderBlock(b);tocColumn.replaceChildren(el);return el.getBoundingClientRect().height+parseFloat(getComputedStyle(el).marginBottom||0);};
@@ -5179,13 +5179,14 @@ async function aiRequestBlocks(key,prompt,signal,preserve=false,validate=null,so
  let originalsById=new Map();if(preserve&&sourceText){try{const source=JSON.parse(sourceText);if(Array.isArray(source))originalsById=new Map(source.map(b=>[b.sourceId,b]));}catch{}}
  const schema='أنت مؤلف ومحرر كتب. نوع الكتاب: '+genre.name+'. '+(!['engineering','electricity','science'].includes(aiTemplate)?'اكتب نصوصاً أدبية وفكرية أصلية، دون نسبة أقوال مخترعة لأشخاص حقيقيين، ودون تشخيصات أو وعود علاجية. لا تحول النص إلى منهج مدرسي، ولا تضف تدريبات ومخططات بلا حاجة. استخدم paragraph للشعر مع فواصل أسطر، وnote للاقتباس أو الخاطرة. ':'استخدم المعادلات والمخططات والجداول حيث تفيد الشرح التقني. ')+ 'كل عنصر له حقل type نصي وحقل text نصي. أمثلة دقيقة: {"blocks":[{"type":"lesson","text":"عنوان القسم"},{"type":"paragraph","text":"شرح هنا"},{"type":"diagram","text":"دورة الماء","diagramStyle":"flow","items":"تبخر | تحول الماء لبخار\\nتكاثف | تتكون القطرات"},{"type":"table","text":"مقارنة","rowsText":"مفهوم | شرح\\nمثال | تفصيل"}]}. أعد JSON صالحاً فقط بلا markdown أو سياج كود بالشكل {"blocks":[...]}. الأدوات المتاحة: chapter,lesson,heading,paragraph,definition,note,example مع solution,exercise مع answer,list بأسطر منفصلة,table مع rowsText نص فيه كل سطر صف وخلاياه مفصولة بالرمز | والسطر الأول ترويسة,equation مع text بصيغة LaTeX صحيحة،diagram مع text عنوان وdiagramStyle flow أو cycle أو compare وitems نص فيه كل سطر: عنوان مرحلة | تفسير. المخطط من 2 إلى 4 مراحل. لا تستخدم HTML ولا SVG. المعادلات داخل النص تحاط بعلامتي الدولار وتبقى المعادلة كاملة داخل زوج واحد، مع تهريب الشرطة المائلة وفق JSON. لا تكتب أسهماً نصية؛ استخدم diagram. كل فقرة مستقلة من 40 إلى 100 كلمة. المصطلحات والعناوين عربية، من دون تشكيل كثيف، ولا كلمات أجنبية عشوائية. لا تضع أسماء القوالب أو اسم أستاذ افتراضي. لا تكرر عنوان تذكر داخل الملاحظة. قدّم محتوى متقناً ومناسباً لنوع الكتاب.';
  let repairRaw=null;
- for(let attempt=0;attempt<10;attempt++){
-  let response;try{response=await aiFetchWithTimeout('https://api.apinex.bond/v1/chat/completions',{method:'POST',signal,headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},body:JSON.stringify({model:'free/deepseek-v4.1-flash',messages:[{role:'system',content:preserve?'أنت مصمم كتب تستخدم أدوات المنصة فعلياً وفق المحتوى. أعد JSON فقط {"blocks":[...]}. لكل عنصر أصلي أعد عنصراً واحداً بنفس sourceId وبنوع type مناسب. المعرفات أرقام قصيرة مثل "0" و"1"؛ يمكن إعادتها كأرقام أو نصوص. لا تنسخ نص العنصر الأصلي؛ المنصة تعرضه كاملاً من المصدر حسب sourceId. استخدم text فقط لعنوان المخطط أو عند تحويل قائمة إلى أسطر. اختر type: chapter للفصل، lesson للقسم، heading للعنوان القصير، paragraph للشرح، definition لتعريف موجود، note لمعلومة مهمة موجودة، example لمثال موجود، list لقائمة، table لمقارنة فعلية، equation لمعادلة موجودة فقط. لا تجعل فقرة طويلة عنواناً. اختر الأدوات حسب مضمون النص، لا حسب اسم قالب الغلاف. جدول: rowsText نص كل سطر صف وخلاياه مفصولة |؛ احتفظ بكل المعلومات. يمكنك إضافة مخطط بصري مفيد واحد لكل دفعة عندما يشرح النص مراحل أو دورة أو مقارنة: type diagram وsourceIds معرفات النصوص المستند إليها وtext عنوان وdiagramStyle flow أو cycle أو compare وitems من 2 إلى 4 أسطر؛ كل سطر اسم مرحلة | وصف قصير مقتبس من المصدر. المخطط يضاف بعد الشرح ولا يستبدله. استخدم أسماء المراحل الحقيقية، ولا تستخدم أيقونة معلومات أو عبارة مفتاح بصري بدلاً من الرسم. لا تضف حقائق أو أمثلة أو تمارين جديدة. أخرج عناصر النص الأصلية بالترتيب، ويمكن وضع المخطط بعد مصدره. لا تستخدم HTML أو SVG. لا تضف مخططاً زخرفياً للشعر أو السرد غير المحتاج إليه.':schema},{role:'user',content:prompt},...(repairRaw?[{role:'assistant',content:repairRaw},{role:'user',content:'أعد خطة التنسيق من المصدر الأصلي. أدرج جميع sourceId الأصلية مرة واحدة فقط، ولا تنسخ النص الأصلي. أعد أدوات فعلية وعناوين وصناديق مناسبة. sourceIds مخصص للمخطط الإضافي فقط. صحح JSON، ولا تحذف معلومات.'}]:[])],temperature:0.2,max_tokens:7500,response_format:{type:'json_object'}})});}catch(err){if(signal.aborted||err.name==='AbortError')throw err;if(attempt<9){await aiPause(700*(attempt+1),signal);continue;}throw Error('تعذر الاتصال بالمزوّد.');}
-  let data;try{data=await response.json();}catch{if(attempt<9){await aiPause(700*(attempt+1),signal);continue;}throw Error('تعذرت قراءة استجابة المزوّد.');} 
-  if(response.status===429&&attempt<9){const delay=Math.min(60,Math.max(5,Number(data.error?.message?.match(/Retry in (\d+)/i)?.[1])||20));await aiPause(delay*1000,signal);continue;}
-  if(!response.ok){if(response.status===401||response.status===403)throw aiPermanentError('مفتاح التفعيل غير صالح أو لا يملك صلاحية الوصول.');if(response.status>=400&&response.status<500&&response.status!==408&&response.status!==429)throw aiPermanentError('تعذر إنشاء الكتاب (رمز '+response.status+').');if(attempt<9){await aiPause(700*(attempt+1),signal);continue;}throw Error('تعذر الاتصال بخدمة الإنشاء.');}
-  const choice=data.choices?.[0];if(choice?.finish_reason==='length'){if(attempt<9){prompt+=' اجعل كل فقرة قصيرة حتى يكتمل الرد.';continue;}throw Error('لم يكتمل رد الخدمة.');}
-  const raw=choice?.message?.content;if(typeof raw!=='string'||!raw.trim()){if(attempt<9){await aiPause(700*(attempt+1),signal);continue;}throw Error('رد خدمة الإنشاء فارغ.');}
+ const maxAttempts=2;
+ for(let attempt=0;attempt<maxAttempts;attempt++){
+  let response;try{response=await aiFetchWithTimeout('https://api.apinex.bond/v1/chat/completions',{method:'POST',signal,headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},body:JSON.stringify({model:'free/deepseek-v4.1-flash',messages:[{role:'system',content:preserve?'أنت مصمم كتب تستخدم أدوات المنصة فعلياً وفق المحتوى. أعد JSON فقط {"blocks":[...]}. لكل عنصر أصلي أعد عنصراً واحداً بنفس sourceId وبنوع type مناسب. المعرفات أرقام قصيرة مثل "0" و"1"؛ يمكن إعادتها كأرقام أو نصوص. لا تنسخ نص العنصر الأصلي؛ المنصة تعرضه كاملاً من المصدر حسب sourceId. استخدم text فقط لعنوان المخطط أو عند تحويل قائمة إلى أسطر. اختر type: chapter للفصل، lesson للقسم، heading للعنوان القصير، paragraph للشرح، definition لتعريف موجود، note لمعلومة مهمة موجودة، example لمثال موجود، list لقائمة، table لمقارنة فعلية، equation لمعادلة موجودة فقط. حافظ على أنواع العناوين الصريحة chapter وlesson وheading. للسطر الذي يحمل headingCandidate=true، حدّد من سياق الأسطر المجاورة هل هو عنوان يقدّم قسماً جديداً، مثل «بيت الرسائل المؤجلة»، أو عنوان فرعي داخل قسم، مثل «الساعات المتوقفة». استخدم chapter لعنوان الفصل أو القسم الرئيسي وlesson للعنوان الفرعي وheading للمستوى الثالث. مجرد قصر السطر أو استقلاله لا يجعله عنواناً. أبق السرد والحوار والشعر كفقرات paragraph حتى عند غياب علامات الترقيم. لا تختر عنواناً من نصوص التفكير والتوقيت. حافظ على النص والترتيب ولا تخترع عناوين. اختر الأدوات حسب مضمون النص، لا حسب اسم قالب الغلاف. جدول: rowsText نص كل سطر صف وخلاياه مفصولة |؛ احتفظ بكل المعلومات. يمكنك إضافة مخطط بصري مفيد واحد لكل دفعة عندما يشرح النص مراحل أو دورة أو مقارنة: type diagram وsourceIds معرفات النصوص المستند إليها وtext عنوان وdiagramStyle flow أو cycle أو compare وitems من 2 إلى 4 أسطر؛ كل سطر اسم مرحلة | وصف قصير مقتبس من المصدر. المخطط يضاف بعد الشرح ولا يستبدله. استخدم أسماء المراحل الحقيقية، ولا تستخدم أيقونة معلومات أو عبارة مفتاح بصري بدلاً من الرسم. لا تضف حقائق أو أمثلة أو تمارين جديدة. أخرج عناصر النص الأصلية بالترتيب، ويمكن وضع المخطط بعد مصدره. لا تستخدم HTML أو SVG. لا تضف مخططاً زخرفياً للشعر أو السرد غير المحتاج إليه.':schema},{role:'user',content:prompt},...(repairRaw?[{role:'assistant',content:repairRaw},{role:'user',content:'أعد خطة التنسيق من المصدر الأصلي. أدرج جميع sourceId الأصلية مرة واحدة فقط، ولا تنسخ النص الأصلي. أعد أدوات فعلية وعناوين وصناديق مناسبة. sourceIds مخصص للمخطط الإضافي فقط. صحح JSON، ولا تحذف معلومات.'}]:[])],temperature:0.2,max_tokens:7500,response_format:{type:'json_object'}})});}catch(err){if(signal.aborted||err.name==='AbortError')throw err;if(attempt+1<maxAttempts){await aiPause(700*(attempt+1),signal);continue;}throw Error('تعذر الاتصال بالمزوّد.');}
+  let data;try{data=await response.json();}catch{if(attempt+1<maxAttempts){await aiPause(700*(attempt+1),signal);continue;}throw Error('تعذرت قراءة استجابة المزوّد.');} 
+  if(response.status===429)throw Error('خدمة التنسيق مشغولة الآن.');
+  if(!response.ok){if(response.status===401||response.status===403)throw aiPermanentError('مفتاح التفعيل غير صالح أو لا يملك صلاحية الوصول.');if(response.status>=400&&response.status<500&&response.status!==408&&response.status!==429)throw aiPermanentError('تعذر إنشاء الكتاب (رمز '+response.status+').');if(attempt+1<maxAttempts){await aiPause(700*(attempt+1),signal);continue;}throw Error('تعذر الاتصال بخدمة الإنشاء.');}
+  const choice=data.choices?.[0];if(choice?.finish_reason==='length'){if(attempt+1<maxAttempts){prompt+=' اجعل كل فقرة قصيرة حتى يكتمل الرد.';continue;}throw Error('لم يكتمل رد الخدمة.');}
+  const raw=choice?.message?.content;if(typeof raw!=='string'||!raw.trim()){if(attempt+1<maxAttempts){await aiPause(700*(attempt+1),signal);continue;}throw Error('رد خدمة الإنشاء فارغ.');}
   try{const parsed=JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,''));let output;
    if(originalsById.size){
     const entries=Array.isArray(parsed.blocks)?parsed.blocks:parsed.blocks&&typeof parsed.blocks==='object'?Object.entries(parsed.blocks).map(([sourceId,b])=>({...b,sourceId})):[];
@@ -5200,7 +5201,7 @@ async function aiRequestBlocks(key,prompt,signal,preserve=false,validate=null,so
      if(original&&b.type!=='diagram'&&b.type!=='table')b.text=typeof b.text==='string'&&b.text.trim()?b.text:original.text;
      try{const block=aiBlocksFromResponse({blocks:[b]},preserve)[0];output.push(block);if(b.type!=='diagram')seen.add(b.sourceId);}catch{/* Ignore only the unusable tool; the original source remains authoritative. */}
     }
-   }else output=aiBlocksFromResponse(parsed,preserve);if(validate&&!validate(output))throw Error('الخطة لا تحتوي على قرارات مرتبطة بمعرفات المصدر. استخدم sourceId وtype للعناصر الأصلية.');return output;}catch(err){if(attempt>=9)throw Error('تعذر إكمال تصميم الصفحات بعد عشر محاولات. النص محفوظ في مساحة التأليف؛ يمكنك إعادة الإنشاء.');repairRaw=raw;await aiPause(500*(attempt+1),signal);continue;}
+   }else output=aiBlocksFromResponse(parsed,preserve);if(validate&&!validate(output))throw Error('الخطة لا تحتوي على قرارات مرتبطة بمعرفات المصدر. استخدم sourceId وtype للعناصر الأصلية.');return output;}catch(err){if(attempt+1===maxAttempts)throw Error('لم يُرجع النموذج خطة تنسيق صالحة.');repairRaw=raw;await aiPause(500*(attempt+1),signal);continue;}
  }
  throw Error('تعذر إكمال الطلب بعد انتظار حد المزوّد.');
 }
@@ -5215,6 +5216,12 @@ function aiFormatIsClose(source,blocks){
  for(const word of original){const current=new Uint16Array(result.length+1);for(let j=1;j<=result.length;j++)current[j]=word===result[j-1]?previous[j-1]+1:Math.max(previous[j],current[j-1]);previous=current;}
  const matches=previous[result.length],budget=Math.max(1,Math.floor(original.length*.05));
  return original.length-matches<=budget&&result.length-matches<=budget;
+}
+function aiCanPromoteHeading(original){
+ const text=original.text.trim();
+ if(original.type!=='paragraph'||!text||text.length>100||text.split(/\s+/u).length>12)return false;
+ // A short standalone line may be a title. Dialogue and complete prose stay in the body.
+ return !/[\r\n«»“”"]/u.test(text)&&!/^[-–—]/u.test(text)&&!/[.!?؟…؛،]$/u.test(text);
 }
 function aiPrepareSource(text){
  return parseText(text).flatMap(original=>{
@@ -5241,10 +5248,8 @@ $('aiGenerate').onclick=async()=>{
  safeLocal.set('malazem-activation-key',key);
  aiBusy=true;aiAbort=new AbortController();$('aiGenerate').disabled=true;$('aiKeyError').textContent='';$('aiKeyCancel').textContent='إيقاف';
  try{
-  let blocks=[];
-  for(let run=0;run<1;run++){
-   blocks=[];
-   try{
+  const blocks=[];
+  let usedLocalFormatting=false;
   const sourceBlocks=aiPrepareSource(aiText),jobs=[];let pending=[],size=0;
   const flushJob=()=>{if(pending.length){jobs.push(pending);pending=[];size=0;}};
   for(const item of sourceBlocks){
@@ -5253,21 +5258,33 @@ $('aiGenerate').onclick=async()=>{
   }flushJob();
   for(let i=0;i<jobs.length;i++){
    const originals=jobs[i];
+   if(usedLocalFormatting){blocks.push(...originals);continue;}
    if(originals.length===1&&(['table','image','break','diagram'].includes(originals[0].type)||originals[0].text.length>5000)){blocks.push(...originals);continue;}
    $('aiGenerate').textContent='تصميم صفحات الكتاب '+(i+1)+' / '+jobs.length+'…';
    const ids=originals.map((b,j)=>String(j)),allowed=new Set(['chapter','lesson','heading','paragraph','definition','note','example','list','table','equation']);
-   const valid=output=>{const base=output.filter(b=>b.sourceId&&b.type!=='diagram');return base.length>=Math.max(1,Math.ceil(ids.length*.5))&&base.every(b=>ids.includes(b.sourceId)&&allowed.has(b.type))&&new Set(base.map(b=>b.sourceId)).size===base.length;};
-   const source=JSON.stringify(originals.map((b,j)=>({sourceId:String(j),type:b.type,text:b.text})));
-   const answer=await aiRequestBlocks(key,'صمّم هذه العناصر باستخدام أدوات المنصة الملائمة. حوّل العناوين غير المنسقة إلى heading أو lesson، والتعريف إلى definition، والمعلومة المهمة إلى note، والمثال إلى example، والمقارنة إلى table إذا احتفظت بكل النص. أضف diagram حقيقياً عند وجود خطوات أو دورة موصوفة، بمراحل مقتبسة فقط. لا تكرر النص في صناديق إضافية، ولا تضف معلومات. أعد خطة مختصرة تحوي sourceId وtype لكل عنصر. ستعرض المنصة النص الأصلي كاملاً تلقائياً. text مطلوب للمخطط فقط، أو لبناء قائمة. المصدر JSON: '+source,aiAbort.signal,true,valid,source);
+   const valid=output=>{const base=output.filter(b=>b.sourceId&&b.type!=='diagram');return base.length>0&&base.every(b=>ids.includes(b.sourceId)&&allowed.has(b.type))&&new Set(base.map(b=>b.sourceId)).size===base.length;};
+   const headingCandidates=originals.map(aiCanPromoteHeading);
+   const source=JSON.stringify(originals.map((b,j)=>({sourceId:String(j),type:b.type,text:b.text,headingCandidate:headingCandidates[j]})));
+   let answer;
+   try{
+    answer=await aiRequestBlocks(key,'صمّم هذه العناصر باستخدام أدوات المنصة الملائمة. صنّف العناوين المستقلة المرشحة حسب السياق إلى chapter للعناوين الرئيسية وlesson للعناوين الفرعية وheading للمستوى الثالث. احتفظ بنوع العناوين الصريحة. اترك الجمل السردية والحوار والشعر في paragraph. حوّل التعريف الصريح إلى definition، والمعلومة المهمة إلى note، والمثال إلى example، والمقارنة إلى table إذا احتفظت بكل النص. أضف diagram حقيقياً عند وجود خطوات أو دورة موصوفة، بمراحل مقتبسة فقط. لا تكرر النص في صناديق إضافية، ولا تضف معلومات. أعد خطة مختصرة تحوي sourceId وtype لكل عنصر. ستعرض المنصة النص الأصلي كاملاً تلقائياً. text مطلوب للمخطط فقط، أو لبناء قائمة. المصدر JSON: '+source,aiAbort.signal,true,valid,source);
+   }catch(error){
+    if(aiAbort.signal.aborted||error.name==='AbortError')throw error;
+    usedLocalFormatting=true;
+    blocks.push(...originals);
+    continue;
+   }
    const plans=new Map(answer.filter(b=>b.sourceId&&b.type!=='diagram').map(b=>[b.sourceId,b]));
    let visualCount=0;
    for(const [sourceIndex,original] of originals.entries()){
     const plan=plans.get(String(sourceIndex));let formatted={...original};
-    if(plan){
-     if(plan.type==='table'&&aiFormatIsClose(original.text,[{...plan,text:''}]))formatted={...original,type:'table',text:'',rows:plan.rows};
+    if(plan&&!headingTypes.has(original.type)){
+     if(headingTypes.has(plan.type)){
+      if(headingCandidates[sourceIndex])formatted.type=plan.type;
+     }else if(plan.type==='table'&&aiFormatIsClose(original.text,[{...plan,text:''}]))formatted={...original,type:'table',text:'',rows:plan.rows};
      else if(plan.type==='list'&&aiFormatIsClose(original.text,[plan]))formatted={...original,type:'list',text:plan.text,ordered:plan.ordered};
      else if(plan.type==='equation'&&/[=\\]/.test(original.text)&&original.text.length<300)formatted={...original,type:'equation',text:plan.text,direction:'ltr'};
-     else if(!['table','list','equation'].includes(plan.type)&&(!headingTypes.has(plan.type)||original.text.length<180))formatted={...original,type:plan.type,text:aiFormatIsClose(original.text,[plan])?plan.text:original.text};
+     else if(!['table','list','equation'].includes(plan.type))formatted={...original,type:plan.type,text:aiFormatIsClose(original.text,[plan])?plan.text:original.text};
     }
     blocks.push(formatted);
     for(const visual of answer.filter(b=>b.type==='diagram'&&!b.sourceId)){
@@ -5279,12 +5296,17 @@ $('aiGenerate').onclick=async()=>{
    }
   }
 
-   break;
-   }catch(err){if(aiAbort.signal.aborted||err.name==='AbortError'||err.permanent||run===0)throw err;await aiPause(1000*(run+1),aiAbort.signal);}
-  }
   if(aiAbort.signal.aborted)throw new DOMException('Aborted','AbortError');
-  await kitabiCommit(blocks);aiDraftParts=[];aiDraftKey='';if(aiKeyDialog.open)aiKeyDialog.close();$('aiKey').value='';kitabiShowReady();$('kitabiAddText').focus();
- }catch(err){const message=err.name==='AbortError'?'أُوقفت العملية؛ لم تتغير الكتاب الحالية.':err.message||'تعذر إكمال إنشاء الكتاب بعد عشر محاولات.';$('aiKeyError').textContent=message;if(!aiKeyDialog.open){if(err.permanent&&/مفتاح/.test(err.message)){safeLocal.set('malazem-activation-key','');$('aiKey').value='';aiKeyDialog.showModal();$('aiKey').focus();}else if($('aiInlineError'))$('aiInlineError').textContent=message;}}
+  await kitabiCommit(blocks);aiDraftParts=[];aiDraftKey='';if(aiKeyDialog.open)aiKeyDialog.close();$('aiKey').value='';kitabiShowReady();
+  if(usedLocalFormatting){
+   const notice=document.createElement('p');
+   notice.className='intro';
+   notice.setAttribute('role','status');
+   notice.textContent='استخدمنا التنسيق المحلي للأجزاء التي تعذّر على النموذج تنسيقها.';
+   $('kitabiAddText').before(notice);
+  }
+  $('kitabiAddText').focus();
+ }catch(err){const message=err.name==='AbortError'?'أُوقفت العملية؛ لم تتغير الكتاب الحالية.':err.message||'تعذر حفظ الكتاب. النص محفوظ في مساحة التأليف.';$('aiKeyError').textContent=message;if(!aiKeyDialog.open){if(err.permanent&&/مفتاح/.test(err.message)){safeLocal.set('malazem-activation-key','');$('aiKey').value='';aiKeyDialog.showModal();$('aiKey').focus();}else if($('aiInlineError'))$('aiInlineError').textContent=message;}}
  finally{aiBusy=false;aiAbort=null;$('aiGenerate').disabled=false;$('aiGenerate').textContent='إنشاء الكتاب';$('aiKeyCancel').textContent='إلغاء';aiAutoCleanup?.();aiAutoCleanup=null;}
 };
 
